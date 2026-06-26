@@ -1,0 +1,44 @@
+{
+  "entities": {
+    "Place": {
+      "title": "Place",
+      "description": "A work site or house project managed by the mason",
+      "type": "object",
+      "properties": {
+        "placeId": { "type": "string" },
+        "placeName": { "type": "string" },
+        "ownerName": { "type": "string" },
+        "phoneNumber": { "type": "string" },
+        "note": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["placeId", "placeName", "createdAt", "updatedAt"]
+    },
+    "Transaction": {
+      "title": "Transaction",
+      "description": "A financial entry representing a transaction for a site",
+      "type": "object",
+      "properties": {
+        "transactionId": { "type": "string" },
+        "placeId": { "type": "string" },
+        "date": { "type": "string", "format": "date" },
+        "amount": { "type": "number" },
+        "note": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["transactionId", "placeId", "date", "amount", "createdAt", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/places/{placeId}": {
+      "schema": "Place",
+      "description": "Collection of work sites/projects"
+    },
+    "/places/{placeId}/transactions/{transactionId}": {
+      "schema": "Transaction",
+      "description": "Collection of transactions for a specific place"
+    }
+  }
+}

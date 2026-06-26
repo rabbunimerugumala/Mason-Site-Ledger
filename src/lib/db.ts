@@ -1,0 +1,413 @@
+import { initializeApp, getApps } from "firebase/app";
+import { 
+  getFirestore, 
+  collection, 
+  doc, 
+  getDocs, 
+  setDoc, 
+  deleteDoc, 
+  query, 
+  orderBy, 
+  Firestore,
+  writeBatch
+} from "firebase/firestore";
+import { Place, Transaction } from "../types";
+
+// Memory fallback for localStorage if blocked or disabled (e.g. sandboxed iframe or private window)
+const memoryStore: Record<string, string> = {};
+
+const safeStorage = {
+  getItem: (key: string): string | null => {
+    try {
+      return localStorage.getItem(key);
+    } catch (e) {
+      console.warn("Storage read failed. Falling back to memory store.", e);
+      return memoryStore[key] || null;
+    }
+  },
+  setItem: (key: string, value: string): void => {
+    try {
+      localStorage.setItem(key, value);
+    } catch (e) {
+      console.warn("Storage write failed. Falling back to memory store.", e);
+      memoryStore[key] = value;
+    }
+  }
+};
+
+// Generate or retrieve a stable device/user ID to partition data locally and in cloud
+const getDeviceId = (): string => {
+  let id = safeStorage.getItem("mason_ledger_device_id");
+  if (!id) {
+    id = "mason_" + Math.random().toString(36).substring(2, 15) + "_" + Date.now();
+    safeStorage.setItem("mason_ledger_device_id", id);
+  }
+  return id;
+};
+
+export const deviceId = getDeviceId();
+
+// Database state
+let db: Firestore | null = null;
+let useFirebase = false;
+
+// Event emitter to notify the UI when storage engine status changes
+type StatusCallback = (status: { connected: boolean; provider: "Cloud" | "Local" }) => void;
+const listeners: StatusCallback[] = [];
+
+export const onStorageStatusChange = (callback: StatusCallback) => {
+  listeners.push(callback);
+  // Immediate trigger
+  callback({ connected: useFirebase, provider: useFirebase ? "Cloud" : "Local" });
+  return () => {
+    const idx = listeners.indexOf(callback);
+    if (idx !== -1) listeners.splice(idx, 1);
+  };
+};
+
+const notifyStatus = () => {
+  listeners.forEach(cb => cb({ connected: useFirebase, provider: useFirebase ? "Cloud" : "Local" }));
+};
+
+// Auto-initialize by fetching the applet firebase config if available
+const initStorage = async () => {
+  try {
+    const response = await fetch("/firebase-applet-config.json");
+    if (response.ok) {
+      const contentType = response.headers.get("content-type");
+      if (contentType && contentType.includes("application/json")) {
+        try {
+          const config = await response.json();
+          if (config && config.apiKey) {
+            if (getApps().length === 0) {
+              const app = initializeApp(config);
+              db = config.firestoreDatabaseId 
+                ? getFirestore(app, config.firestoreDatabaseId)
+                : getFirestore(app);
+              useFirebase = true;
+              console.log("Firebase Firestore initialized successfully as the primary storage engine.");
+            } else {
+              const app = getApps()[0];
+              db = config.firestoreDatabaseId 
+                ? getFirestore(app, config.firestoreDatabaseId)
+                : getFirestore(app);
+              useFirebase = true;
+            }
+            // Trigger automatic background synchronization of any existing offline/local data
+            setTimeout(syncLocalToFirebase, 1000);
+          }
+        } catch (jsonErr) {
+          console.warn("Failed to parse firebase-applet-config.json. Continuing in local-only mode.", jsonErr);
+        }
+      } else {
+        console.log("firebase-applet-config.json not found or returned invalid content-type. Continuing in local-only mode.");
+      }
+    }
+  } catch (err) {
+    console.log("Firebase config file not found or failed to load. Falling back to secure localStorage driver.", err);
+  }
+  notifyStatus();
+};
+
+// Automatic background synchronization function
+const syncLocalToFirebase = async () => {
+  if (!useFirebase || !db) return;
+  try {
+    const localPlaces = getLocalPlaces();
+    const localTransactions = getLocalTransactions();
+
+    if (localPlaces.length === 0) return;
+
+    console.log(`Starting background sync of ${localPlaces.length} places and ${localTransactions.length} transactions to Firestore...`);
+
+    // Let's copy all places
+    for (const place of localPlaces) {
+      const placeRef = doc(db, "places", place.placeId);
+      await setDoc(placeRef, { ...place, deviceId }, { merge: true });
+    }
+
+    // Let's copy all transactions
+    for (const tx of localTransactions) {
+      const txRef = doc(db, "places", tx.placeId, "transactions", tx.transactionId);
+      await setDoc(txRef, { ...tx, deviceId }, { merge: true });
+    }
+
+    console.log("Background synchronization to Firebase Firestore completed successfully!");
+  } catch (e) {
+    console.warn("Background sync failed or partially completed:", e);
+  }
+};
+
+// Trigger async initialization
+initStorage();
+
+// LOCAL STORAGE DRIVER HELPERS
+const getLocalPlaces = (): Place[] => {
+  try {
+    const data = safeStorage.getItem("mason_ledger_places");
+    if (!data) return [];
+    const parsed = JSON.parse(data);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (e) {
+    console.error("Failed to parse local places", e);
+    return [];
+  }
+};
+
+const saveLocalPlaces = (places: Place[]) => {
+  const safePlaces = Array.isArray(places) ? places : [];
+  safeStorage.setItem("mason_ledger_places", JSON.stringify(safePlaces));
+};
+
+const getLocalTransactions = (): Transaction[] => {
+  try {
+    const data = safeStorage.getItem("mason_ledger_transactions");
+    if (!data) return [];
+    const parsed = JSON.parse(data);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (e) {
+    console.error("Failed to parse local transactions", e);
+    return [];
+  }
+};
+
+const saveLocalTransactions = (txs: Transaction[]) => {
+  const safeTxs = Array.isArray(txs) ? txs : [];
+  safeStorage.setItem("mason_ledger_transactions", JSON.stringify(safeTxs));
+};
+
+// UNIFIED EXPORTED DATABASE ACTIONS (CRUD)
+
+/**
+ * Fetch all Khata Places/Sites
+ */
+export const getPlaces = async (): Promise<Place[]> => {
+  if (useFirebase && db) {
+    try {
+      const placesCol = collection(db, "places");
+      const q = query(placesCol, orderBy("createdAt", "desc"));
+      const snapshot = await getDocs(q);
+      const places: Place[] = [];
+      snapshot.forEach((docSnap) => {
+        const data = docSnap.data();
+        if (!data.deviceId || data.deviceId === deviceId) {
+          places.push({
+            placeId: docSnap.id,
+            placeName: data.placeName || "",
+            createdAt: data.createdAt || new Date().toISOString(),
+            updatedAt: data.updatedAt || new Date().toISOString(),
+          });
+        }
+      });
+      return places;
+    } catch (e) {
+      console.warn("Firestore read failed, using localStorage fallback", e);
+    }
+  }
+  
+  return getLocalPlaces().sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+};
+
+/**
+ * Save or update a Khata Place
+ */
+export const savePlace = async (place: Place): Promise<void> => {
+  const enrichedPlace = {
+    ...place,
+    deviceId, // attach device ID for security/partitioning
+  };
+
+  if (useFirebase && db) {
+    try {
+      const docRef = doc(db, "places", enrichedPlace.placeId);
+      await setDoc(docRef, enrichedPlace);
+    } catch (e) {
+      console.warn("Firestore write failed, writing to localStorage", e);
+    }
+  }
+
+  const places = getLocalPlaces();
+  const index = places.findIndex(p => p.placeId === enrichedPlace.placeId);
+  if (index !== -1) {
+    places[index] = enrichedPlace;
+  } else {
+    places.push(enrichedPlace);
+  }
+  saveLocalPlaces(places);
+};
+
+/**
+ * Delete a Place and all its transactions
+ */
+export const deletePlace = async (placeId: string): Promise<void> => {
+  if (useFirebase && db) {
+    try {
+      // 1. Delete transactions inside the subcollection first
+      const txsCol = collection(db, "places", placeId, "transactions");
+      const txSnapshot = await getDocs(txsCol);
+      const batch = writeBatch(db);
+      txSnapshot.forEach((docSnap) => {
+        batch.delete(docSnap.ref);
+      });
+      
+      // 2. Delete the place document itself
+      const placeRef = doc(db, "places", placeId);
+      batch.delete(placeRef);
+      
+      await batch.commit();
+    } catch (e) {
+      console.warn("Firestore delete failed, performing local delete", e);
+    }
+  }
+
+  const places = getLocalPlaces().filter(p => p.placeId !== placeId);
+  saveLocalPlaces(places);
+
+  const transactions = getLocalTransactions().filter(t => t.placeId !== placeId);
+  saveLocalTransactions(transactions);
+};
+
+/**
+ * Get all transactions for a specific Place
+ * Sorted by date descending, then createdAt descending
+ */
+export const getTransactions = async (placeId: string): Promise<Transaction[]> => {
+  if (useFirebase && db) {
+    try {
+      const txsCol = collection(db, "places", placeId, "transactions");
+      const snapshot = await getDocs(txsCol);
+      const txs: Transaction[] = [];
+      snapshot.forEach((docSnap) => {
+        const data = docSnap.data();
+        txs.push({
+          transactionId: docSnap.id,
+          placeId: placeId,
+          date: data.date || "",
+          amount: Number(data.amount) || 0,
+          note: data.note || "",
+          createdAt: data.createdAt || new Date().toISOString(),
+          updatedAt: data.updatedAt || new Date().toISOString(),
+        });
+      });
+      
+      return txs.sort((a, b) => {
+        const dateDiff = new Date(b.date).getTime() - new Date(a.date).getTime();
+        if (dateDiff !== 0) return dateDiff;
+        return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+      });
+    } catch (e) {
+      console.warn("Firestore read transactions failed, using localStorage fallback", e);
+    }
+  }
+
+  return getLocalTransactions()
+    .filter(t => t.placeId === placeId)
+    .sort((a, b) => {
+      const dateDiff = new Date(b.date).getTime() - new Date(a.date).getTime();
+      if (dateDiff !== 0) return dateDiff;
+      return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+    });
+};
+
+/**
+ * Save or update a transaction
+ */
+export const saveTransaction = async (tx: Transaction): Promise<void> => {
+  const enrichedTx = {
+    ...tx,
+    deviceId,
+  };
+
+  if (useFirebase && db) {
+    try {
+      const docRef = doc(db, "places", enrichedTx.placeId, "transactions", enrichedTx.transactionId);
+      await setDoc(docRef, enrichedTx);
+      
+      // Update place's updatedAt timestamp
+      const placeRef = doc(db, "places", enrichedTx.placeId);
+      await setDoc(placeRef, { updatedAt: new Date().toISOString() }, { merge: true });
+    } catch (e) {
+      console.warn("Firestore write transaction failed, using localStorage", e);
+    }
+  }
+
+  const txs = getLocalTransactions();
+  const index = txs.findIndex(t => t.transactionId === enrichedTx.transactionId);
+  if (index !== -1) {
+    txs[index] = enrichedTx;
+  } else {
+    txs.push(enrichedTx);
+  }
+  saveLocalTransactions(txs);
+
+  // Update local place timestamp
+  const places = getLocalPlaces();
+  const pIndex = places.findIndex(p => p.placeId === enrichedTx.placeId);
+  if (pIndex !== -1) {
+    places[pIndex].updatedAt = new Date().toISOString();
+    saveLocalPlaces(places);
+  }
+};
+
+/**
+ * Delete a transaction
+ */
+export const deleteTransaction = async (placeId: string, transactionId: string): Promise<void> => {
+  if (useFirebase && db) {
+    try {
+      const docRef = doc(db, "places", placeId, "transactions", transactionId);
+      await deleteDoc(docRef);
+
+      // Update place's updatedAt timestamp
+      const placeRef = doc(db, "places", placeId);
+      await setDoc(placeRef, { updatedAt: new Date().toISOString() }, { merge: true });
+    } catch (e) {
+      console.warn("Firestore delete transaction failed, performing local delete", e);
+    }
+  }
+
+  const txs = getLocalTransactions().filter(t => t.transactionId !== transactionId);
+  saveLocalTransactions(txs);
+
+  // Update local place timestamp
+  const places = getLocalPlaces();
+  const pIndex = places.findIndex(p => p.placeId === placeId);
+  if (pIndex !== -1) {
+    places[pIndex].updatedAt = new Date().toISOString();
+    saveLocalPlaces(places);
+  }
+};
+
+/**
+ * Clear all transactions for a Place
+ */
+export const clearTransactions = async (placeId: string): Promise<void> => {
+  if (useFirebase && db) {
+    try {
+      const txsCol = collection(db, "places", placeId, "transactions");
+      const snapshot = await getDocs(txsCol);
+      const batch = writeBatch(db);
+      snapshot.forEach((docSnap) => {
+        batch.delete(docSnap.ref);
+      });
+      await batch.commit();
+
+      // Update place's updatedAt timestamp
+      const placeRef = doc(db, "places", placeId);
+      await setDoc(placeRef, { updatedAt: new Date().toISOString() }, { merge: true });
+    } catch (e) {
+      console.warn("Firestore clear transactions failed, performing local clear", e);
+    }
+  }
+
+  const txs = getLocalTransactions().filter(t => t.placeId !== placeId);
+  saveLocalTransactions(txs);
+
+  // Update local place timestamp
+  const places = getLocalPlaces();
+  const pIndex = places.findIndex(p => p.placeId === placeId);
+  if (pIndex !== -1) {
+    places[pIndex].updatedAt = new Date().toISOString();
+    saveLocalPlaces(places);
+  }
+};

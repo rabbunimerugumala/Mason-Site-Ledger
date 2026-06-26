@@ -1,0 +1,8 @@
+{
+  "name": "Mason Site Ledger",
+  "description": "A clean, accessible, mobile-first khata book designed for mason workers to track money entries across multiple work sites and projects with offline-first support and PDF reports.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
