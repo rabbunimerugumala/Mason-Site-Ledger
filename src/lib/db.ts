@@ -4,6 +4,7 @@ import {
   collection, 
   doc, 
   getDocs, 
+  getDoc,
   setDoc, 
   deleteDoc, 
   query, 
@@ -32,6 +33,14 @@ const safeStorage = {
       console.warn("Storage write failed. Falling back to memory store.", e);
       memoryStore[key] = value;
     }
+  },
+  removeItem: (key: string): void => {
+    try {
+      localStorage.removeItem(key);
+    } catch (e) {
+      console.warn("Storage delete failed. Falling back to memory store.", e);
+      delete memoryStore[key];
+    }
   }
 };
 
@@ -51,14 +60,19 @@ export const deviceId = getDeviceId();
 let db: Firestore | null = null;
 let useFirebase = false;
 
-// Event emitter to notify the UI when storage engine status changes
-type StatusCallback = (status: { connected: boolean; provider: "Cloud" | "Local" }) => void;
+// Active User state (Simple Username-only Auth)
+let activeUsername: string | null = safeStorage.getItem("mason_ledger_active_username");
+
+export const getActiveUsername = (): string | null => activeUsername;
+
+// Event emitter to notify the UI when storage engine status or login state changes
+type StatusCallback = (status: { connected: boolean; provider: "Cloud" | "Local"; username: string | null }) => void;
 const listeners: StatusCallback[] = [];
 
 export const onStorageStatusChange = (callback: StatusCallback) => {
   listeners.push(callback);
   // Immediate trigger
-  callback({ connected: useFirebase, provider: useFirebase ? "Cloud" : "Local" });
+  callback({ connected: useFirebase, provider: useFirebase ? "Cloud" : "Local", username: activeUsername });
   return () => {
     const idx = listeners.indexOf(callback);
     if (idx !== -1) listeners.splice(idx, 1);
@@ -66,7 +80,135 @@ export const onStorageStatusChange = (callback: StatusCallback) => {
 };
 
 const notifyStatus = () => {
-  listeners.forEach(cb => cb({ connected: useFirebase, provider: useFirebase ? "Cloud" : "Local" }));
+  listeners.forEach(cb => cb({ connected: useFirebase, provider: useFirebase ? "Cloud" : "Local", username: activeUsername }));
+};
+
+// Local storage helpers for offline profiles
+const getLocalRegisteredUsernames = (): string[] => {
+  try {
+    const data = safeStorage.getItem("mason_ledger_registered_usernames");
+    if (!data) return [];
+    const parsed = JSON.parse(data);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (e) {
+    return [];
+  }
+};
+
+const saveLocalRegisteredUsernames = (usernames: string[]) => {
+  safeStorage.setItem("mason_ledger_registered_usernames", JSON.stringify(usernames));
+};
+
+/**
+ * Check if a username is already taken.
+ * Returns true if taken, false if available.
+ */
+export const checkUsernameExists = async (username: string): Promise<boolean> => {
+  const normUser = username.trim().toLowerCase();
+  if (!normUser) return true; // Empty is considered taken/invalid
+
+  if (useFirebase && db) {
+    try {
+      const userRef = doc(db, "users", normUser);
+      const userSnap = await getDoc(userRef);
+      return userSnap.exists();
+    } catch (e) {
+      console.warn("Firestore check username failed, falling back to local list", e);
+    }
+  }
+
+  // Fallback to local
+  const localUsers = getLocalRegisteredUsernames();
+  return localUsers.includes(normUser);
+};
+
+/**
+ * Register a new username.
+ * Throws an error if already exists.
+ */
+export const registerUsername = async (username: string): Promise<void> => {
+  const normUser = username.trim().toLowerCase();
+  const displayUser = username.trim();
+  if (!normUser) throw new Error("Username cannot be empty.");
+
+  const exists = await checkUsernameExists(normUser);
+  if (exists) {
+    throw new Error("This username is already taken. Please choose a different name!");
+  }
+
+  if (useFirebase && db) {
+    try {
+      const userRef = doc(db, "users", normUser);
+      await setDoc(userRef, {
+        username: displayUser,
+        createdAt: new Date().toISOString(),
+        deviceId
+      });
+    } catch (e) {
+      console.warn("Firestore register username failed, continuing locally", e);
+    }
+  }
+
+  // Save to local list of usernames for offline lookup
+  const localUsers = getLocalRegisteredUsernames();
+  if (!localUsers.includes(normUser)) {
+    localUsers.push(normUser);
+    saveLocalRegisteredUsernames(localUsers);
+  }
+
+  // Set as active logged in user
+  activeUsername = displayUser;
+  safeStorage.setItem("mason_ledger_active_username", displayUser);
+  notifyStatus();
+  
+  // Trigger background sync for this user
+  setTimeout(syncLocalToFirebase, 1000);
+};
+
+/**
+ * Log in with an existing username.
+ * Returns true if successful, false if username does not exist.
+ */
+export const loginUsername = async (username: string): Promise<boolean> => {
+  const normUser = username.trim().toLowerCase();
+  const displayUser = username.trim();
+  if (!normUser) return false;
+
+  const exists = await checkUsernameExists(normUser);
+  if (!exists) {
+    return false;
+  }
+
+  // If online, let's fetch the correct casing of the username if possible
+  let finalUsername = displayUser;
+  if (useFirebase && db) {
+    try {
+      const userRef = doc(db, "users", normUser);
+      const userSnap = await getDoc(userRef);
+      if (userSnap.exists()) {
+        finalUsername = userSnap.data().username || displayUser;
+      }
+    } catch (e) {
+      console.warn("Failed to fetch user profile, using typed username", e);
+    }
+  }
+
+  activeUsername = finalUsername;
+  safeStorage.setItem("mason_ledger_active_username", finalUsername);
+  notifyStatus();
+  
+  // Trigger background sync for this user
+  setTimeout(syncLocalToFirebase, 1000);
+  return true;
+};
+
+/**
+ * Log out current user.
+ */
+export const logoutUser = () => {
+  activeUsername = null;
+  safeStorage.removeItem("mason_ledger_active_username");
+  notifyStatus();
 };
 
 // Auto-initialize by fetching the applet firebase config if available
@@ -109,6 +251,17 @@ const initStorage = async () => {
   notifyStatus();
 };
 
+// Helper to remove undefined values from objects before writing to Firestore
+const cleanUndefined = (obj: any): any => {
+  const cleaned: any = {};
+  for (const key in obj) {
+    if (obj[key] !== undefined) {
+      cleaned[key] = obj[key];
+    }
+  }
+  return cleaned;
+};
+
 // Automatic background synchronization function
 const syncLocalToFirebase = async () => {
   if (!useFirebase || !db) return;
@@ -123,13 +276,13 @@ const syncLocalToFirebase = async () => {
     // Let's copy all places
     for (const place of localPlaces) {
       const placeRef = doc(db, "places", place.placeId);
-      await setDoc(placeRef, { ...place, deviceId }, { merge: true });
+      await setDoc(placeRef, cleanUndefined({ ...place, deviceId, username: activeUsername || null }), { merge: true });
     }
 
     // Let's copy all transactions
     for (const tx of localTransactions) {
       const txRef = doc(db, "places", tx.placeId, "transactions", tx.transactionId);
-      await setDoc(txRef, { ...tx, deviceId }, { merge: true });
+      await setDoc(txRef, cleanUndefined({ ...tx, deviceId, username: activeUsername || null }), { merge: true });
     }
 
     console.log("Background synchronization to Firebase Firestore completed successfully!");
@@ -144,7 +297,8 @@ initStorage();
 // LOCAL STORAGE DRIVER HELPERS
 const getLocalPlaces = (): Place[] => {
   try {
-    const data = safeStorage.getItem("mason_ledger_places");
+    const key = activeUsername ? `mason_ledger_places_${activeUsername}` : "mason_ledger_places";
+    const data = safeStorage.getItem(key);
     if (!data) return [];
     const parsed = JSON.parse(data);
     return Array.isArray(parsed) ? parsed : [];
@@ -156,12 +310,14 @@ const getLocalPlaces = (): Place[] => {
 
 const saveLocalPlaces = (places: Place[]) => {
   const safePlaces = Array.isArray(places) ? places : [];
-  safeStorage.setItem("mason_ledger_places", JSON.stringify(safePlaces));
+  const key = activeUsername ? `mason_ledger_places_${activeUsername}` : "mason_ledger_places";
+  safeStorage.setItem(key, JSON.stringify(safePlaces));
 };
 
 const getLocalTransactions = (): Transaction[] => {
   try {
-    const data = safeStorage.getItem("mason_ledger_transactions");
+    const key = activeUsername ? `mason_ledger_transactions_${activeUsername}` : "mason_ledger_transactions";
+    const data = safeStorage.getItem(key);
     if (!data) return [];
     const parsed = JSON.parse(data);
     return Array.isArray(parsed) ? parsed : [];
@@ -173,7 +329,8 @@ const getLocalTransactions = (): Transaction[] => {
 
 const saveLocalTransactions = (txs: Transaction[]) => {
   const safeTxs = Array.isArray(txs) ? txs : [];
-  safeStorage.setItem("mason_ledger_transactions", JSON.stringify(safeTxs));
+  const key = activeUsername ? `mason_ledger_transactions_${activeUsername}` : "mason_ledger_transactions";
+  safeStorage.setItem(key, JSON.stringify(safeTxs));
 };
 
 // UNIFIED EXPORTED DATABASE ACTIONS (CRUD)
@@ -190,13 +347,24 @@ export const getPlaces = async (): Promise<Place[]> => {
       const places: Place[] = [];
       snapshot.forEach((docSnap) => {
         const data = docSnap.data();
-        if (!data.deviceId || data.deviceId === deviceId) {
-          places.push({
-            placeId: docSnap.id,
-            placeName: data.placeName || "",
-            createdAt: data.createdAt || new Date().toISOString(),
-            updatedAt: data.updatedAt || new Date().toISOString(),
-          });
+        if (activeUsername) {
+          if (data.username === activeUsername) {
+            places.push({
+              placeId: docSnap.id,
+              placeName: data.placeName || "",
+              createdAt: data.createdAt || new Date().toISOString(),
+              updatedAt: data.updatedAt || new Date().toISOString(),
+            });
+          }
+        } else {
+          if (!data.username && (!data.deviceId || data.deviceId === deviceId)) {
+            places.push({
+              placeId: docSnap.id,
+              placeName: data.placeName || "",
+              createdAt: data.createdAt || new Date().toISOString(),
+              updatedAt: data.updatedAt || new Date().toISOString(),
+            });
+          }
         }
       });
       return places;
@@ -215,12 +383,13 @@ export const savePlace = async (place: Place): Promise<void> => {
   const enrichedPlace = {
     ...place,
     deviceId, // attach device ID for security/partitioning
+    username: activeUsername || null,
   };
 
   if (useFirebase && db) {
     try {
       const docRef = doc(db, "places", enrichedPlace.placeId);
-      await setDoc(docRef, enrichedPlace);
+      await setDoc(docRef, cleanUndefined(enrichedPlace));
     } catch (e) {
       console.warn("Firestore write failed, writing to localStorage", e);
     }
@@ -316,12 +485,13 @@ export const saveTransaction = async (tx: Transaction): Promise<void> => {
   const enrichedTx = {
     ...tx,
     deviceId,
+    username: activeUsername || null,
   };
 
   if (useFirebase && db) {
     try {
       const docRef = doc(db, "places", enrichedTx.placeId, "transactions", enrichedTx.transactionId);
-      await setDoc(docRef, enrichedTx);
+      await setDoc(docRef, cleanUndefined(enrichedTx));
       
       // Update place's updatedAt timestamp
       const placeRef = doc(db, "places", enrichedTx.placeId);
@@ -411,3 +581,5 @@ export const clearTransactions = async (placeId: string): Promise<void> => {
     saveLocalPlaces(places);
   }
 };
+
+

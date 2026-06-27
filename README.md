@@ -6,7 +6,7 @@
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.8-3178C6.svg)](https://www.typescriptlang.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-**Mason Site Ledger** is a clean, accessible, mobile-first khata book designed specifically for mason workers, construction contractors, and site supervisors. It simplifies tracking daily money entries, labor payments, and material costs across multiple active work sites with robust offline-first capabilities, intelligent cloud syncing, and professional PDF report generation.
+**Mason Site Ledger** is a clean, accessible, mobile-first ledger book designed specifically for brickmasons, construction contractors, site supervisors, and freelance tradespeople. It simplifies tracking daily payment entries, material costs, wage advances, and labor payouts across multiple work sites with a robust offline-first sync engine, multi-account username partitioning, professional printable reports, and absolute cloud resilience.
 
 ---
 
@@ -15,45 +15,94 @@
 - [Project Context & Identity](#-project-context--identity)
   - [Key Features](#-key-features)
   - [Tech Stack](#-tech-stack)
+- [🔑 Simple Username-Based Login System](#-simple-username-based-login-system)
+  - [How Registration and Login Work](#how-registration-and-login-work)
+  - [Security \& Data Isolation per User](#security--data-isolation-per-user)
+- [💾 Robust Offline & Cloud Sync Architecture](#-robust-offline--cloud-sync-architecture)
+  - [The "Undefined Payload" Fix (Data Reliability)](#the-undefined-payload-fix-data-reliability)
+  - [Automatic Background Synchronization](#automatic-background-synchronization)
 - [Setup and Getting Started](#-setup-and-getting-started)
   - [Prerequisites](#-prerequisites)
   - [Installation](#-installation)
   - [Environment Configuration](#-environment-configuration)
-- [Technical Usage & Architecture](#-technical-usage--architecture)
+- [Technical Usage & Layouts](#-technical-usage--layouts)
   - [Usage Examples](#-usage-examples)
+  - [Print-Friendly CSS Sheets](#-print-friendly-css-sheets)
   - [Repository Structure](#-repository-structure)
-  - [Offline & Sync Engine (Database Architecture)](#-offline--sync-engine-database-architecture)
-  - [Code Verification & Quality Checks](#-code-verification--quality-checks)
 - [Meta Information](#-meta-information)
   - [Roadmap & Known Issues](#-roadmap--known-issues)
-  - [Contributing Guidelines](#-contributing-guidelines)
   - [License](#-license)
-  - [Contact & Support](#-contact--support)
 
 ---
 
 ## 🏗️ Project Context & Identity
 
-In construction and masonry work, internet connections are often unreliable, and users require straightforward, highly readable interfaces. The **Mason Site Ledger** addresses this by acting as a digital pocket notebook that works completely offline. 
+In physical labor environments and construction zones, network connectivity is often scarce, unstable, or completely absent. **Mason Site Ledger** serves as a digital pocket diary that operates 100% offline while offering seamless, automatic background synchronization to a secure Cloud database once a connection is established.
 
 ### ✨ Key Features
 
-- **📶 Offline-First Khata**: Write daily entries even in zero-network areas. Data is automatically preserved in local storage and queued for background syncing.
-- **☁️ Firebase Cloud Sync**: Instantly merges local records with Firebase Firestore as soon as internet connectivity is detected.
-- **📱 Accessible, Senior-Friendly UI**: High-contrast modern design utilizing large tap targets, clear legible typography, and intuitive color coding for seamless operation.
-- **📄 Professional PDF Reports**: Generate and download comprehensive work site reports containing balance sheets, itemized lists, and site summaries instantly using client-side engines.
-- **⚡ Multiple Work Sites**: Organize money logs separately by site name, contractor, and location.
-- **⚖️ Real-time Totals**: Instant dynamic calculation of total budgets, advances, and pending dues per site.
+- **🔑 Passwordless Username Authentication**: Access separate personal ledgers easily using only a custom username. No complex passwords to remember on active build sites.
+- **📶 Offline-First Khata**: Create work sites and add transaction logs even in zero-network basements. Data is instantly saved to your browser sandbox and queued for sync.
+- **☁️ Firebase Cloud Sync**: Merges local records with Firebase Firestore as soon as internet connectivity is detected.
+- **🛠️ Robust Saving Engine**: Features strict `undefined`-field sanitization, preventing database write crashes from optional fields (like notes or contact details).
+- **📱 Accessible, High-Contrast UI**: Modern design tailored with large touch targets, clear high-legibility typography, and intuitive color coding for rapid single-handed operation.
+- **🖨️ Print-Friendly CSS Layouts**: Optimized `@media print` rules let you print beautiful physical statements or save clear, un-cluttered PDF bills straight from the browser.
+- **⚡ Multiple Active Sites**: Organize logs independently by site name, contractor, and specific building projects.
+- **⚖️ Live Running Balances**: Instant calculations of total expenditures and budgets per project.
 
 ### 💻 Tech Stack
 
 - **Frontend Core**: [React 19](https://react.dev) with [TypeScript](https://www.typescriptlang.org)
 - **Bundler & Tooling**: [Vite 6](https://vitejs.dev)
-- **Styling**: [Tailwind CSS v4](https://tailwindcss.com) for responsive, low-latency UI
-- **Animations**: [Framer Motion](https://www.framer.com/motion/) for smooth layout transitions
-- **Database / Sync**: [Firebase Firestore](https://firebase.google.com/docs/firestore) + Robust LocalStorage / Memory Fallback Sync Engine
-- **Report Exporters**: [jsPDF](https://github.com/parallax/jsPDF) and [html2canvas](https://html2canvas.hertzen.com/)
+- **Styling**: [Tailwind CSS v4](https://tailwindcss.com) for responsive, low-latency UI layout
+- **Animations**: [Framer Motion](https://www.framer.com/motion/) for elegant fluid transitions
+- **Database / Sync**: [Firebase Firestore](https://firebase.google.com/docs/firestore) + partitioned LocalStorage / memory fallbacks
 - **Icons**: [Lucide React](https://lucide.dev)
+
+---
+
+## 🔑 Simple Username-Based Login System
+
+The application features a fast, passwordless **username-based authentication flow** designed for speed and convenience on busy construction sites.
+
+### How Registration and Login Work
+1. **Create Account (Registration)**:
+   - Users choose a custom username (e.g., `rabbuni`, `rajesh_mason`, `site_supervisor`).
+   - The system queries both Local Storage and Cloud Firestore database collections to ensure the username is unique.
+   - If already taken, a warning is shown:  
+     `This username is already taken. Please choose a different name!`
+   - If unique, the username is registered, and the user is instantly logged into their ledger.
+2. **Log In**:
+   - Registered users simply input their existing username to gain immediate access.
+   - If the username is not found, the system guides them to check their spelling or create a new profile.
+3. **Log Out**:
+   - Users can securely log out by clicking the sign-out icon next to their profile badge in the header. The app prompts a confirmation dialog to prevent accidental sign-outs.
+
+### Security & Data Isolation per User
+- **Private Data Partitioning**: All work sites, client contact logs, and transaction ledgers are strictly segmented by the active username.
+- **Cloud Level Isolation**: Firestore collections filter writes and queries using the logged-in `username`. Users cannot view or modify other users' entries.
+- **Local Level Isolation**: Even in offline mode, local browser keys are saved with username-specific prefixes (e.g., `mason_ledger_places_rabbuni`), preventing data mixing on shared devices.
+
+---
+
+## 💾 Robust Offline & Cloud Sync Architecture
+
+### The "Undefined Payload" Fix (Data Reliability)
+
+Previously, trying to write an optional field (like an empty "Note" description) to Firebase Firestore would trigger a silent runtime crash:
+`"Function setDoc() called with invalid data. Unsupported field value: undefined"`
+
+To fix this and guarantee 100% data preservation under all circumstances:
+- We implemented a **strict sanitation middleware** called `cleanUndefined()` inside `/src/lib/db.ts`.
+- This helper automatically sanitizes and strips all empty optional fields from the objects before they are passed to Firestore.
+- This ensures every single write, save, update, and deletion is successfully completed without throwing runtime exceptions.
+
+### Automatic Background Synchronization
+
+The sync engine uses a robust fallback pattern:
+1. Every write is instantly committed to local browser storage (`localStorage`), backed by an in-memory storage dictionary if browser policies block storage.
+2. The engine tracks online status and automatically syncs all unsynced local sites and entries to Cloud Firestore when a connection is restored.
+3. Data is synchronized using a non-destructive merge operation, ensuring no local user effort is ever lost due to intermittent cellular connections.
 
 ---
 
@@ -86,74 +135,59 @@ Ensure you have the following installed locally:
 
 ### 🔐 Database & Environment Configuration
 
-The application is engineered to run **without requiring any manual API keys or credentials** in your source code or configuration files. This keeps your credentials 100% secure.
+The application is engineered to run **without requiring any manual API keys or credentials** in your source code or configuration files, maintaining 100% client security.
 
-- **Zero-Config Database**: The Google AI Studio platform automatically provisions your dedicated Google Cloud Firestore database (`ai-studio-9635da52-455e-4356-8040-9a7e26892f09`) and injects the secure configuration at runtime into `firebase-applet-config.json`.
+- **Zero-Config Database**: The Google AI Studio platform automatically provisions your dedicated Google Cloud Firestore database and injects the secure configuration at runtime into `firebase-applet-config.json`.
 - **Automatic Background Sync**: The app's database client (`/src/lib/db.ts`) detects this config, connects automatically, and seamlessly synchronizes your local offline ledger records directly into the cloud.
-- **No Secret Exposure**: You never have to copy, paste, or commit any Firebase API keys or database secrets. Everything works out of the box securely and automatically!
+- **Offline Fallback**: If `firebase-applet-config.json` is missing (e.g. when downloaded or cloned), the application shifts gracefully into **Local-Only Offline Mode**, allowing you to create records with 100% privacy on your local browser.
 
 ---
 
-### 🔒 Security & Repository Sharing (How Cloning Works)
-
-If you share your repository or if someone downloads/clones your code, **they will NOT have access to your database.** Here is how security is strictly enforced:
-
-#### 1. Credential Protection
-The file `firebase-applet-config.json` contains your private Firebase credentials. This file is listed in the project's `.gitignore`. 
-- **When downloaded/cloned**: The config file is omitted from the git repository entirely.
-- **Result**: No one downloading your source code can see your database configurations, API keys, or project IDs.
-
-#### 2. Graceful Offline-Only Fallback
-If someone runs your downloaded code locally, the application automatically detects that `firebase-applet-config.json` is missing:
-- **Automatic Mode Shift**: The storage engine (`src/lib/db.ts`) will seamlessly shift into **Local-Only Offline Mode**.
-- **User Experience**: The app remains 100% functional! They can create sites, add money entries, view dashboards, and export PDF reports. All their data is saved locally in their browser sandbox (LocalStorage) and remains completely private to their machine.
-- **Zero Interruption**: They will see a clean status badge indicating they are running in **Local Mode** instead of **Cloud Sync Mode**.
-
-#### 3. How Others Can Connect Their Own Firebase DB
-If someone wants to host the app and use their own Firebase Cloud Database, they can do so easily:
-1. Create a project in the [Firebase Console](https://console.firebase.google.com/).
-2. Provision a **Cloud Firestore** database.
-3. Register a Web App in their Firebase project settings to get the Firebase Client Configuration.
-4. Create a file named `firebase-applet-config.json` at the root of their project (or in their public folder) and paste their Firebase config values matching this exact structure:
-   ```json
-   {
-     "projectId": "your-project-id",
-     "appId": "your-app-id",
-     "apiKey": "your-api-key",
-     "authDomain": "your-project.firebaseapp.com",
-     "storageBucket": "your-project.firebasestorage.app",
-     "messagingSenderId": "your-sender-id"
-   }
-   ```
-5. Restart their local development server. The app will immediately recognize the new configuration, connect to their personal database, and begin background syncing their local data to their own cloud!
-
----
-
-## 🛠️ Technical Usage & Architecture
+## 🛠️ Technical Usage & Layouts
 
 ### 📝 Usage Examples
 
-#### 1. Adding a New Work Site
-- Click the **"Add New Work Site"** button on the home screen.
-- Fill in the **Site Name**, **Client / Contractor Name**, and **Location / Landmark**.
+#### 1. Creating a Work Site
+- Click **"New Site"** on the home dashboard.
+- Enter the **Site Name**, **Client Name**, **Phone Number**, and any optional **Location / Details**.
 - Click **"Create Site"** to establish a dedicated ledger.
 
-#### 2. Adding a Money / Work Transaction
-- Select the relevant active site card.
-- Tap **"Add Entry"** to log a credit, debit, or wage payment.
-- Enter the **Amount**, **Date**, and a descriptive **Note** (e.g., "Received advance from client", "Bought 10 cement bags").
-- The running balance instantly updates on the site dashboard.
+#### 2. Logging a Transaction
+- Open the relevant site ledger.
+- Use the **New Entry** form to record credits, debits, advances, or material costs.
+- Provide the **Date**, **Amount**, and an optional **Note** (e.g., "Paid 5 cement bags", "Advance received").
+- The running balance updates instantly.
 
-#### 3. Exporting PDF Reports
-- On any site detail page, click the **"Export Report"** button.
-- Choose **"PDF Invoice / Report"** to download an elegant page layout summarizing the site ledger, perfect for sharing over WhatsApp or email with the client.
+#### 3. Printing Statements
+- On any site detail page, click the **Print Ledger** button or press `Ctrl + P` (or `Cmd + P` on Mac).
+- The print view automatically hides interactive navigation, buttons, forms, and background clutter, producing a clean, professional, high-contrast black-and-white physical ledger printout.
+
+---
+
+### 🖨️ Print-Friendly CSS Sheets
+
+The application utilizes responsive, high-contrast typography styled with custom print media queries:
+```css
+@media print {
+  /* Hides forms, buttons, header banners, footers, and scrollbars */
+  .no-print {
+    display: none !important;
+  }
+  
+  /* Expands container margins and simplifies tables for physical ink */
+  body {
+    background-color: white !important;
+    color: black !important;
+  }
+}
+```
 
 ---
 
 ### 📂 Repository Structure
 
 ```text
-├── assets/                    # Static image assets and icons
+├── assets/                    # Static image assets and logo icons
 ├── src/
 │   ├── components/            # Reusable UI Components
 │   │   ├── AlertModal.tsx     # Clean visual confirmation modals for errors
@@ -172,45 +206,8 @@ If someone wants to host the app and use their own Firebase Cloud Database, they
 ├── index.html                 # Main HTML template with sandbox error handlers
 ├── package.json               # Dependencies and script definitions
 ├── tsconfig.json              # TypeScript compilation rules
-└── vite.config.ts             # Vite server and bundler config
+├── vite.config.ts             # Vite server and bundler config
 ```
-
----
-
-### 🔄 Offline & Sync Engine (Database Architecture)
-
-```
-                       ┌──────────────────────┐
-                       │  Mason Site Ledger   │
-                       └──────────┬───────────┘
-                                  │
-                   ┌──────────────┴──────────────┐
-                   ▼                             ▼
-        ┌────────────────────┐         ┌────────────────────┐
-        │   LocalStorage     │         │ Firebase Firestore │
-        │ (Memory Fallback)  │         │ (If connected)     │
-        └────────────────────┘         └────────────────────┘
-```
-
-The database layers in `/src/lib/db.ts` use a fallback queue structure:
-1. All changes are written immediately to standard `localStorage` with a fast-switching `memoryStore` backup if local cookies or tracking are disabled (such as in iframe-sandboxed environments).
-2. A distinct `deviceId` is dynamically generated to partition work entries safely.
-3. The engine listens to state changes and connects with Firestore asynchronously when online, verifying data parity and synchronizing differences seamlessly.
-
----
-
-### 🚦 Code Verification & Quality Checks
-
-Ensure the application compiles cleanly and passes all TypeScript checks before deploying:
-
-- **Run Type Verification & Linter**:
-  ```bash
-  npm run lint
-  ```
-- **Run Production Build**:
-  ```bash
-  npm run build
-  ```
 
 ---
 
@@ -222,19 +219,6 @@ Ensure the application compiles cleanly and passes all TypeScript checks before 
 - [ ] **Vernacular Language Support**: Multi-lingual localized interfaces (Hindi, Bengali, Telugu, Tamil, etc.) for broader accessibility.
 - [ ] **SMS Receipt Sharing**: Directly send text updates to clients on ledger entry creation.
 
-### 🤝 Contributing Guidelines
-
-Contributions are always welcome to improve utility at construction sites:
-1. Fork the project.
-2. Create a Feature branch: `git checkout -b feature/NewAccessibleFeature`.
-3. Commit changes with explicit messages: `git commit -m 'Add Voice input support'`.
-4. Push the branch and open a Pull Request.
-
 ### 📄 License
 
 Distributed under the MIT License. See `LICENSE` for more information.
-
-### 📞 Contact & Support
-
-Maintainer Email: [support@masonsiteledger.com](mailto:support@masonsiteledger.com)  
-Project Link: [https://github.com/your-username/mason-site-ledger](https://github.com/your-username/mason-site-ledger)
