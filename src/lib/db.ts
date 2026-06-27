@@ -211,42 +211,41 @@ export const logoutUser = () => {
   notifyStatus();
 };
 
-// Auto-initialize by fetching the applet firebase config if available
+// Auto-initialize using environment variables
 const initStorage = async () => {
   try {
-    const response = await fetch("/firebase-applet-config.json");
-    if (response.ok) {
-      const contentType = response.headers.get("content-type");
-      if (contentType && contentType.includes("application/json")) {
-        try {
-          const config = await response.json();
-          if (config && config.apiKey) {
-            if (getApps().length === 0) {
-              const app = initializeApp(config);
-              db = config.firestoreDatabaseId 
-                ? getFirestore(app, config.firestoreDatabaseId)
-                : getFirestore(app);
-              useFirebase = true;
-              console.log("Firebase Firestore initialized successfully as the primary storage engine.");
-            } else {
-              const app = getApps()[0];
-              db = config.firestoreDatabaseId 
-                ? getFirestore(app, config.firestoreDatabaseId)
-                : getFirestore(app);
-              useFirebase = true;
-            }
-            // Trigger automatic background synchronization of any existing offline/local data
-            setTimeout(syncLocalToFirebase, 1000);
-          }
-        } catch (jsonErr) {
-          console.warn("Failed to parse firebase-applet-config.json. Continuing in local-only mode.", jsonErr);
-        }
+    const config = {
+      apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
+      authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+      projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+      storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+      messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+      appId: import.meta.env.VITE_FIREBASE_APP_ID,
+      firestoreDatabaseId: import.meta.env.VITE_FIREBASE_DATABASE_ID
+    };
+
+    if (config.apiKey) {
+      if (getApps().length === 0) {
+        const app = initializeApp(config);
+        db = config.firestoreDatabaseId 
+          ? getFirestore(app, config.firestoreDatabaseId)
+          : getFirestore(app);
+        useFirebase = true;
+        console.log("Firebase Firestore initialized successfully as the primary storage engine.");
       } else {
-        console.log("firebase-applet-config.json not found or returned invalid content-type. Continuing in local-only mode.");
+        const app = getApps()[0];
+        db = config.firestoreDatabaseId 
+          ? getFirestore(app, config.firestoreDatabaseId)
+          : getFirestore(app);
+        useFirebase = true;
       }
+      // Trigger automatic background synchronization of any existing offline/local data
+      setTimeout(syncLocalToFirebase, 1000);
+    } else {
+      console.log("Firebase config missing in environment variables. Continuing in local-only mode.");
     }
   } catch (err) {
-    console.log("Firebase config file not found or failed to load. Falling back to secure localStorage driver.", err);
+    console.log("Firebase initialization failed. Falling back to secure localStorage driver.", err);
   }
   notifyStatus();
 };
